@@ -1,6 +1,8 @@
 package zeimi_raft
 
 import (
+	"errors"
+	"math"
 	"math/rand"
 	"sync"
 	"time"
@@ -88,4 +90,73 @@ func (r *LockRander) Init(i int) int {
 	r.Lock.Lock()
 	defer r.Lock.Unlock()
 	return r.rand.Intn(i)
+}
+
+type Config struct {
+	//自己的id
+	ID uint64
+	//组员
+	peers []uint64
+	//选举时间，如果一个follow在这段时间没有收到心跳，他将发起选举
+	ElectionTick int
+	//心跳
+	HeartBeatTick int
+	//raft落盘的地方
+	Storage Storage
+	//最后一个应用的日志index
+	Applied uint64
+	//日志记录
+	Logger Logger
+	//是否该检测自己的领导地位，如果没超过一半，leader下台
+	CheckQuorum bool
+	//消息的最大值
+	MaxSizePerMsg uint64
+	//最大的可以应用的，已经提交的日志数量
+	MaxCommittedSizePerReady uint64
+	//最大的没有提交的条目数量
+	MaxUncommittedEntriesSize uint64
+	//最大的追加条目数量，防止发送缓存区溢出
+	MaxInflightMsgs int
+}
+
+func (c *Config) valid() error {
+	if c.ID == 0 {
+		return errors.New("can't use 0 as id")
+	}
+	if c.HeartBeatTick <= 0 {
+		return errors.New("heart beat should >= 0")
+	}
+	if c.ElectionTick <= c.HeartBeatTick {
+		return errors.New("ElectionTick >= HeartBeatTick ")
+	}
+	if c.Storage == nil {
+		return errors.New("storage can't be nil")
+	}
+	if c.MaxUncommittedEntriesSize == 0 {
+		c.MaxUncommittedEntriesSize = math.MaxUint64
+	}
+	if c.MaxCommittedSizePerReady == 0 {
+		c.MaxCommittedSizePerReady = c.MaxSizePerMsg
+	}
+	if c.MaxInflightMsgs <= 0 {
+		return errors.New("max inflight messages must be greater than 0")
+	}
+	if c.Logger == nil {
+		c.Logger = NewRaftLogger()
+	}
+	return nil
+}
+
+func newRaft(c *Config) *raft {
+	if err := c.valid(); err != nil {
+		panic(err)
+	}
+	newLogWithSize(c.Storage, c.Logger, c.MaxCommittedSizePerReady)
+	_, cs, err := c.Storage.InitialState()
+	if err != nil {
+		panic(err)
+	}
+	cs.Voters = c.peers
+	r := &raft{}
+	return r
 }
